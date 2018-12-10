@@ -1,0 +1,184 @@
+---
+title: "Projekt 1"
+author: "Grzegorz Miebs"
+date: "10 listopada 2018"
+output: 
+  html_document: 
+    fig_caption: yes
+    keep_md: yes
+    number_sections: yes
+    theme: spacelab
+    toc: yes
+    toc_float: yes
+---
+#Ws
+Surowy zbiór danych był na tyle duży, że problematyczne było załadowanie go w całości do pamięci RAM. Dopiero usunięcie pewnej części zbędnych danych jeszcze przed wczytaniem pozwoliło na wczytanie go do data frame'a. Mimo usunięcia sporej liczby krotek i atrybutów podczas wstępnego przetwarzania, nadal w fazie uczenia maszynowego mieliśmy doczynienia z ponad 350000 obserwacjami, po 383 atrybuty każda. Było to zbyt dużo dla większości algorytmów, aby być w stanie zbudować model korzystając z pozostałej wolnej pamięci RAM. W tym wypadku pierwotnie zdecydowano się na podejście przyrostowe i budowanie modelu stopniowo z na tyle małych wycinków zbioru danych, aby było możliwe przeprowadzenie uczenia. Później jednak wybrano selekcję atrybutów jak sposób na rozwiązanie problemów z pamięcią. Przy okazji przyspieszyło to znacznie same obliczenia. 
+
+#Ładowanie bibliotek
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r include, warning=F, message=F}
+library(dplyr)
+library(ggplot2)
+library(caret)
+library(DT)
+library(reshape2)
+library(tidyr)
+library(plotly)
+library(biglm)
+```
+
+```{r table, echo=F}
+prettyTable <- function(table_df, round_columns=numeric(), round_digits=2) {
+    DT::datatable(table_df, style="bootstrap", filter = "top", rownames = FALSE, extensions = "Buttons", options = list(dom = 'Bfrtip', buttons = c('copy', 'csv', 'excel', 'pdf', 'print'))) %>%
+    formatRound(round_columns, round_digits)
+}
+```
+#Wstępne przetwarzanie
+## Wczytywanie i czyszczenie danych
+Usunięcie atrybutów redundantnych, pustych, o zbyt złożonej strukturze do analizy. Decyzję podjęto na podstawie wstępnego przejrzenia pliku all_summary.csv zawierającego cały zbiór danych. Pozwala to zmniejszyć rozmiar wczytywanego pliku, a w konsekwencji rozmiar wynikowego data frame'a. Dzięki temu zabiegowi jest on w stanie zmieścić się w pamięci RAM.
+```{r removing}
+if (!("data.csv" %in% dir())) 
+    system("cut -d';' -f1-3,27,399 --complement all_summary/all_summary.csv > data.csv")
+```
+
+Wczytanie danych i usunięcie kolumn które nie wezmą udziału w dalszym przetwarzaniu.
+```{r load, cache=T}
+df <- read.table("data.csv", nrows = 75000, header = T, sep=";", comment.char = "")
+classes <- sapply(df, class)
+df <- read.table("data.csv", nrows = 591043, header = T, sep=";", comment.char = "", colClasses = classes)
+colToRemove <- c("local_BAa", "local_NPa", "local_Ra", "local_RGa", "local_SRGa", "local_CCSa", "local_CCPa", "local_ZOa", "local_ZDa", "local_ZD_minus_a", "local_ZD_plus_a", "local_res_atom_count", "local_res_atom_non_h_occupancy_sum", "local_res_atom_non_h_electron_occupancy_sum", "local_res_atom_C_count", "local_res_atom_N_count", "local_res_atom_O_count", "local_res_atom_S_count", "dict_atom_C_count", "dict_atom_N_count", "dict_atom_O_count", "dict_atom_S_count", "fo_col", "fc_col", "weight_col", "grid_space", "solvent_radius", "solvent_opening_radius", "part_step_FoFc_std_min", "part_step_FoFc_std_max", "part_step_FoFc_std_step")
+df <- df[, !(names(df) %in% colToRemove)]
+```
+
+Usunięcie ze zbioru danych ktrotek, które posiadają wskazane wartości atrybutu res_name
+```{r clean}
+df <- filter(df, !res_name %in% c("UNK", "UNX", "UNL", "DUM", "N", "BLOB", "ALA", "ARG", "ASN", "ASP", "CYS", "GLN", "GLU", "GLY", "HIS", "ILE", "LEU", "LYS", "MET", "MSE", "PHE", "PRO", "SEC", "SER", "THR", "TRP", "TYR", "VAL", "DA", "DG", "DT", "DC", "DU", "A", "G", "T", "C", "U", "HOH", "H20", "WAT"))
+```
+
+## Obsługa wartości pustych
+Na tym etapie przetwarzania w zbiorze danych występuje 40036 krotrek o conajmniej jednej wartości pustej. Przekłada się to na nieco mniej niż 7% całego zbioru. Ponieważ dalej chcemy rozważać tylko 50 najczęstszych wartości atrybutu res_name sprawdzimy, czy usunięcie wszytskich krotek z wartościami pustymi wpłynie na ten wybór. Okazuje się, że po zostawieniu jedynie kompletnych krotek nadal wybierzemy te same 50 wartości res_name. W związku z tym decydujemy się na tę obsługę wartości pustych.
+```{r naAnal}
+sumna <- sapply(df, function(x) sum(is.na(x)))
+sumna <- sumna[sumna > 0]
+print(max(sumna))
+print(max(sumna)/length(df[[1]]))
+dfComplete <- df[complete.cases(df),]
+countn <- (df %>% group_by(res_name) %>% summarise(n()) %>% rename(sum = "n()") %>% filter(!is.na(res_name)) %>% arrange(desc(sum)))[1:50,1]
+countn2 <- (dfComplete %>% group_by(res_name) %>% summarise(n()) %>% rename(sum = "n()") %>% arrange(desc(sum)))[1:50,1]
+length(intersect(countn$res_name, countn2$res_name))
+df <- dfComplete
+rm(dfComplete)
+```
+
+##Podsumowanie przetworzonych danych
+Po wstępnym przetworzeniu zbiór danych składa się z `r length(df[[1]])` krotek, każda zawiera `r length(df)` atrybutów. 4 z nich są typu factor a pozostałe 384 to liczby, gdzie 51 to liczby całkowite a 333 zmiennoprzecinkowe.
+```{r basicAnal}
+print(length(df[[1]]))
+print(length(df))
+knitr::kable(table(sapply(df, class)))
+```
+
+#Analiza danych
+Sprawdzenie liczności każdej z 50 klas.
+```{r resNameCount}
+df <- filter(df, res_name %in% countn2$res_name)
+countn <- df %>% group_by(res_name) %>% summarise(n()) %>% rename(sum = "n()") %>% arrange(desc(sum))
+prettyTable(countn)
+```
+
+##Korelacja
+Po wyliczeniu korelacji między atrybutami liczbowymi okazuje się, że wiele z nich jest bardzo silnie skorelowanych. 
+```{r corel, warning=F, cache=T}
+correl <- cor(df[, sapply(df, is.numeric)])
+correl[lower.tri(correl)] <- NA
+correl <- melt(correl)
+correl <- correl[complete.cases(correl), ] %>% filter(Var1 != Var2) %>% mutate(absValue = abs(value)) %>% arrange(desc(absValue))
+prettyTable(correl)
+cantUse <- c("dict_atom_non_h_count", "dict_atom_non_h_electron_sum", "local_res_atom_non_h_electron_sum", "local_res_atom_non_h_count")
+colForElectron <- (correl %>% filter(Var1 == "local_res_atom_non_h_count", abs(value) > 0.6))$Var2
+colForElectron <- as.vector(colForElectron[!colForElectron %in% cantUse])
+colForAtom <- (correl %>% filter(Var1 == "local_res_atom_non_h_electron_sum", abs(value) > 0.6))$Var2
+colForAtom <- as.vector(colForAtom[!colForAtom %in% cantUse])
+rm(correl)
+```
+
+##Wykresy rozkładów
+Zarówno rozkład liczby atomów jak i elektronów skupia się głównie na mniejszych wartościach, stosunkowo niewielkich w porównaniu do zakresu wartości na tych atrybutach.
+```{r plots}
+ggplotly(ggplot(df, aes(local_res_atom_non_h_count)) + geom_density())
+ggplotly(ggplot(df, aes(local_res_atom_non_h_electron_sum)) + geom_density())
+```
+
+##Analiza niezgodności liczby atomów i elektronów
+Ze względu na stosunkowo duży zakres wartości obu atrybutów, zdecydowano się bazować na błędzie względnym zamiast bezwzględnego. Podejście te ma tą własność, że pomyłka o 2 elektrony będzie dużym błędem gdy rzeczywista wartość to 1, natomiast znacznie mniejszym przy rzeczywistej wartości 400.
+```{r differs}
+knitr::kable((df %>% group_by(res_name) %>% summarise(mean(abs(1-local_res_atom_non_h_count/dict_atom_non_h_count))) %>% rename(sum = 2) %>% arrange(desc(sum)))[1:10,] %>% rename("średni błąd względny liczby atomów" = 2))
+knitr::kable((df %>% group_by(res_name) %>% summarise(mean(abs(1-local_res_atom_non_h_electron_sum/dict_atom_non_h_electron_sum))) %>% rename(sum = 2) %>% arrange(desc(sum)))[1:10,] %>% rename("średni błąd względny liczby elektronów" = 2))
+```
+
+<style>
+  .bigplot{
+      overflow-x:scroll;
+      white-space: nowrap;
+  }
+
+  .bigplot img{
+     max-width: none;
+  }
+
+
+</style>
+<div class="bigplot">
+##Rozkałd wartości atrybutów part_01
+```{r morePlots, fig.width=20,fig.height=15, echo=F, cache=T, eval=F}
+df[,grep("^part_01", names(df))] %>% gather() %>% ggplot(aes(value)) + facet_wrap(~ key, scales = "free") + geom_density()
+```
+</div>
+
+#Uczenie maszynowe
+W tej sekcji nastąpi próba obliczania liczby atomów i elektronów, oraz przewidzenia wartości atrybutu res_id.
+##Regresja liczby atomów
+```{r regression, cache=T}
+moreColToRemove <- c("dict_atom_non_h_count", "dict_atom_non_h_electron_sum", "pdb_code", "res_id", "chain_id")
+df <- df[, !(names(df) %in% moreColToRemove)]
+forTrain <- createDataPartition(df$local_res_atom_non_h_count, p= .95, list=F)
+formula <- as.formula(paste("local_res_atom_non_h_count ~ ", paste(colForAtom, collapse = " + ")))
+split = 20
+colForAtom <- append(colForAtom, "local_res_atom_non_h_count")
+df2 <- df[, names(df) %in% colForAtom]
+model <- lm(formula, data=df2[forTrain, ])
+y <- predict(model, df2[-forTrain, ])
+diff <- y-df[-forTrain, "local_res_atom_non_h_count"]
+diff <- diff*diff
+rmse <- sqrt(mean(diff))
+r2 <- cor(y, df[-forTrain, "local_res_atom_non_h_count"])^2
+print(rmse)
+print(r2)
+rm(model, y, diff)
+```
+
+##Regresja liczby elektronów
+```{r regression2, cache=T}
+forTrain <- createDataPartition(df$local_res_atom_non_h_electron_sum, p= .95, list=F)
+formula <- as.formula(paste("local_res_atom_non_h_electron_sum ~ ", paste(colForElectron, collapse = " + ")))
+split = 20
+colForElectron <- append(colForElectron, "local_res_atom_non_h_electron_sum")
+df2 <- df[, names(df) %in% colForElectron]
+model <- biglm(formula, df2[forTrain, ])
+y <- predict(model, df2[-forTrain, ])
+diff <- y-df[-forTrain, "local_res_atom_non_h_electron_sum"]
+diff <- diff*diff
+rmse <- sqrt(mean(diff))
+r2 <- cor(y, df[-forTrain, "local_res_atom_non_h_electron_sum"])^2
+print(rmse)
+print(r2)
+rm(model, y, diff)
+```
+##Klasyfikacja
+```{r classification, cache=T}
+epochs = 50
+batches = 35
+```
