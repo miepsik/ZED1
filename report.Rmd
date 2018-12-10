@@ -11,7 +11,7 @@ output:
     toc: yes
     toc_float: yes
 ---
-#Ws
+#Wstęp
 Surowy zbiór danych był na tyle duży, że problematyczne było załadowanie go w całości do pamięci RAM. Dopiero usunięcie pewnej części zbędnych danych jeszcze przed wczytaniem pozwoliło na wczytanie go do data frame'a. Mimo usunięcia sporej liczby krotek i atrybutów podczas wstępnego przetwarzania, nadal w fazie uczenia maszynowego mieliśmy doczynienia z ponad 350000 obserwacjami, po 383 atrybuty każda. Było to zbyt dużo dla większości algorytmów, aby być w stanie zbudować model korzystając z pozostałej wolnej pamięci RAM. W tym wypadku pierwotnie zdecydowano się na podejście przyrostowe i budowanie modelu stopniowo z na tyle małych wycinków zbioru danych, aby było możliwe przeprowadzenie uczenia. Później jednak wybrano selekcję atrybutów jak sposób na rozwiązanie problemów z pamięcią. Przy okazji przyspieszyło to znacznie same obliczenia. 
 
 #Ładowanie bibliotek
@@ -28,6 +28,7 @@ library(reshape2)
 library(tidyr)
 library(plotly)
 library(biglm)
+library(xgboost)
 ```
 
 ```{r table, echo=F}
@@ -37,6 +38,9 @@ prettyTable <- function(table_df, round_columns=numeric(), round_digits=2) {
 }
 ```
 #Wstępne przetwarzanie
+```{r seed}
+set.seed(95)
+```
 ## Wczytywanie i czyszczenie danych
 Usunięcie atrybutów redundantnych, pustych, o zbyt złożonej strukturze do analizy. Decyzję podjęto na podstawie wstępnego przejrzenia pliku all_summary.csv zawierającego cały zbiór danych. Pozwala to zmniejszyć rozmiar wczytywanego pliku, a w konsekwencji rozmiar wynikowego data frame'a. Dzięki temu zabiegowi jest on w stanie zmieścić się w pamięci RAM.
 ```{r removing}
@@ -86,6 +90,7 @@ Sprawdzenie liczności każdej z 50 klas.
 ```{r resNameCount}
 df <- filter(df, res_name %in% countn2$res_name)
 countn <- df %>% group_by(res_name) %>% summarise(n()) %>% rename(sum = "n()") %>% arrange(desc(sum))
+df$res_name <- factor(df$res_name)
 prettyTable(countn)
 ```
 
@@ -177,8 +182,22 @@ print(rmse)
 print(r2)
 rm(model, y, diff)
 ```
+Regresja nie okazała się być bardzo dokładną, jednak może to być spowodowane prostotą modelu linowego.
 ##Klasyfikacja
+W celu poprawienia jakości klasyfikacji, a przede wszystkim czasu uczenia i zajętości pamięciowej dokonana została selekcja atrybutów. Najpierw usunięto atrybuty o zerowej wariancji a następnie te, które były silnie skorelowane z innymi. 
 ```{r classification, cache=T}
-epochs = 50
-batches = 35
+colToRemove <- c("local_res_atom_non_h_count", "local_res_atom_non_h_electron_sum")
+df <- df[, !(names(df) %in% colToRemove)]
+df <- df[,sapply(df, function(v) !is.numeric(v) || (var(v)!=0))]
+correl <- cor(df[, sapply(df, is.numeric)])
+correl[lower.tri(correl, diag = T)] <- 0
+correl <- apply(correl, 2, max)
+correl <- correl[correl > 0.8]
+df <- df[, !(names(df) %in% names(correl))]
+df$res_name <- factor(df$res_name)
+forTrain <- createDataPartition(df$res_name, p=.7, list = F)
+dtest <- xgb.DMatrix(data = as.matrix(df[-forTrain, names(df) != "res_name"]), label = df[-forTrain, "res_name"])
+dtrain <- xgb.DMatrix(data = as.matrix(df[forTrain, names(df) != "res_name"]), label = df[forTrain, "res_name"])
+watchlist <- list(train=dtrain, test=dtest)
+bstDMatrix <- xgb.train(data = dtrain, max.depth = 10, eta = 1, nthread = 4, nrounds = 1, objective = "multi:softmax", tree_method="approx", num_class=51, watchlist=watchlist)
 ```
