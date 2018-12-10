@@ -146,7 +146,7 @@ df[,grep("^part_01", names(df))] %>% gather() %>% ggplot(aes(value)) + facet_wra
 #Uczenie maszynowe
 W tej sekcji nastąpi próba obliczania liczby atomów i elektronów, oraz przewidzenia wartości atrybutu res_id.
 ##Regresja liczby atomów
-```{r regression, cache=T}
+```{r regression }
 moreColToRemove <- c("dict_atom_non_h_count", "dict_atom_non_h_electron_sum", "pdb_code", "res_id", "chain_id")
 df <- df[, !(names(df) %in% moreColToRemove)]
 forTrain <- createDataPartition(df$local_res_atom_non_h_count, p= .95, list=F)
@@ -166,7 +166,7 @@ rm(model, y, diff)
 ```
 
 ##Regresja liczby elektronów
-```{r regression2, cache=T}
+```{r regression2}
 forTrain <- createDataPartition(df$local_res_atom_non_h_electron_sum, p= .95, list=F)
 formula <- as.formula(paste("local_res_atom_non_h_electron_sum ~ ", paste(colForElectron, collapse = " + ")))
 split = 20
@@ -184,7 +184,7 @@ rm(model, y, diff)
 ```
 Regresja nie okazała się być bardzo dokładną, jednak może to być spowodowane prostotą modelu linowego.
 ##Klasyfikacja
-W celu poprawienia jakości klasyfikacji, a przede wszystkim czasu uczenia i zajętości pamięciowej dokonana została selekcja atrybutów. Najpierw usunięto atrybuty o zerowej wariancji a następnie te, które były silnie skorelowane z innymi. 
+W celu poprawienia jakości klasyfikacji, a przede wszystkim czasu uczenia i zajętości pamięciowej dokonana została selekcja atrybutów. Najpierw usunięto atrybuty o zerowej wariancji a następnie te, które były silnie skorelowane z innymi. Jako klasyfikatora użyto xgboost.
 ```{r classification, cache=T}
 colToRemove <- c("local_res_atom_non_h_count", "local_res_atom_non_h_electron_sum")
 df <- df[, !(names(df) %in% colToRemove)]
