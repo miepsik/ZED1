@@ -138,7 +138,7 @@ knitr::kable((df %>% group_by(res_name) %>% summarise(mean(abs(1-local_res_atom_
 </style>
 <div class="bigplot">
 ##Rozkałd wartości atrybutów part_01
-```{r morePlots, fig.width=20,fig.height=15, echo=F, cache=T, eval=F}
+```{r morePlots, fig.width=20,fig.height=15, echo=F, cache=T}
 df[,grep("^part_01", names(df))] %>% gather() %>% ggplot(aes(value)) + facet_wrap(~ key, scales = "free") + geom_density()
 ```
 </div>
